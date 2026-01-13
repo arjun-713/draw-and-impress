@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Canvas as FabricCanvas, PencilBrush } from "fabric";
 import { motion } from "framer-motion";
-import { Pencil, Eraser, Undo, Trash2, Vote, Trophy } from "lucide-react";
+import { Pencil, Eraser, Undo, Trash2, Vote, Trophy, AlertCircle, Loader2 } from "lucide-react";
 import { SketchButton } from "@/components/game/SketchButton";
 import { SketchCard, SketchCardContent } from "@/components/game/SketchCard";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
@@ -15,77 +15,195 @@ const COLORS = ["#1a1a2e", "#FF6B6B", "#4ECDC4", "#FFE66D", "#95E1D3", "#F38181"
 const Game = () => {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
-  const { room, players, drawings, playerId, submitDrawing, castVote } = useRoom();
+  const { 
+    room, 
+    players, 
+    drawings, 
+    playerId, 
+    submitDrawing, 
+    castVote, 
+    rejoinRoom, 
+    roomLoadingState, 
+    error,
+    checkHasSubmitted 
+  } = useRoom();
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
   const [activeColor, setActiveColor] = useState(COLORS[0]);
   const [tool, setTool] = useState<"pen" | "eraser">("pen");
   const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [votedId, setVotedId] = useState<string | null>(null);
-
+  const [canvasInitialized, setCanvasInitialized] = useState(false);
+  
   const currentPlayer = players.find(p => p.id === playerId);
 
-  // Initialize canvas
+  // Rejoin room on mount if coming from direct link
   useEffect(() => {
-    if (!canvasRef.current || fabricCanvas) return;
+    if (code && roomLoadingState === 'idle') {
+      rejoinRoom(code);
+    }
+  }, [code, roomLoadingState, rejoinRoom]);
+
+  // Check submission status on mount and round change
+  useEffect(() => {
+    const checkSubmission = async () => {
+      if (room?.status === 'drawing' && playerId) {
+        const submitted = await checkHasSubmitted();
+        setHasSubmitted(submitted);
+      }
+    };
+    checkSubmission();
+  }, [room?.status, room?.current_round, playerId, checkHasSubmitted]);
+
+  // Initialize canvas - with proper DOM availability check
+  useEffect(() => {
+    if (!canvasRef.current || fabricCanvas || room?.status !== 'drawing' || hasSubmitted) return;
     
-    const canvas = new FabricCanvas(canvasRef.current, {
-      width: 600,
-      height: 450,
-      backgroundColor: "#ffffff",
-      isDrawingMode: true,
+    // Defer canvas initialization to ensure DOM is ready
+    const initCanvas = () => {
+      if (!canvasRef.current) return;
+      
+      try {
+        const canvas = new FabricCanvas(canvasRef.current, {
+          width: 600,
+          height: 450,
+          backgroundColor: "#ffffff",
+          isDrawingMode: true,
+          selection: false,
+        });
+        
+        // Set up brush
+        const brush = new PencilBrush(canvas);
+        brush.color = activeColor;
+        brush.width = 4;
+        canvas.freeDrawingBrush = brush;
+        
+        // Ensure canvas accepts pointer events
+        const canvasEl = canvas.getElement();
+        if (canvasEl) {
+          canvasEl.style.touchAction = 'none';
+          canvasEl.style.pointerEvents = 'auto';
+        }
+        
+        // Also set on wrapper
+        const wrapper = canvasEl?.parentElement;
+        if (wrapper) {
+          wrapper.style.touchAction = 'none';
+          wrapper.style.pointerEvents = 'auto';
+        }
+        
+        setFabricCanvas(canvas);
+        setCanvasInitialized(true);
+        
+      } catch (err) {
+        console.error('Canvas initialization error:', err);
+        // Retry after a short delay
+        setTimeout(initCanvas, 100);
+      }
+    };
+    
+    // Use requestAnimationFrame to ensure DOM is painted
+    requestAnimationFrame(() => {
+      initCanvas();
     });
     
-    canvas.freeDrawingBrush = new PencilBrush(canvas);
-    canvas.freeDrawingBrush.color = activeColor;
-    canvas.freeDrawingBrush.width = 4;
-    
-    setFabricCanvas(canvas);
-    
-    return () => { canvas.dispose(); };
-  }, []);
+    return () => {
+      if (fabricCanvas) {
+        fabricCanvas.dispose();
+        setFabricCanvas(null);
+        setCanvasInitialized(false);
+      }
+    };
+  }, [room?.status, hasSubmitted]);
 
-  // Update brush
+  // Cleanup canvas on unmount
+  useEffect(() => {
+    return () => {
+      if (fabricCanvas) {
+        fabricCanvas.dispose();
+      }
+    };
+  }, [fabricCanvas]);
+
+  // Update brush settings
   useEffect(() => {
     if (!fabricCanvas?.freeDrawingBrush) return;
     fabricCanvas.freeDrawingBrush.color = tool === "eraser" ? "#ffffff" : activeColor;
     fabricCanvas.freeDrawingBrush.width = tool === "eraser" ? 20 : 4;
   }, [tool, activeColor, fabricCanvas]);
 
-  const handleUndo = () => {
+  // Reinitialize canvas if drawing is blocked
+  const reinitializeCanvas = useCallback(() => {
+    if (fabricCanvas) {
+      fabricCanvas.dispose();
+      setFabricCanvas(null);
+      setCanvasInitialized(false);
+    }
+  }, [fabricCanvas]);
+
+  const handleUndo = useCallback(() => {
     if (!fabricCanvas) return;
     const objects = fabricCanvas.getObjects();
     if (objects.length > 0) {
       fabricCanvas.remove(objects[objects.length - 1]);
     }
-  };
+  }, [fabricCanvas]);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     if (!fabricCanvas) return;
     fabricCanvas.clear();
     fabricCanvas.backgroundColor = "#ffffff";
-  };
+  }, [fabricCanvas]);
 
   const handleSubmit = useCallback(async () => {
-    if (!fabricCanvas || hasSubmitted) return;
-    const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8, multiplier: 1 });
-    await submitDrawing(dataUrl);
-    setHasSubmitted(true);
-  }, [fabricCanvas, hasSubmitted, submitDrawing]);
+    if (!fabricCanvas || hasSubmitted || isSubmitting) return;
+    
+    setIsSubmitting(true);
+    
+    try {
+      const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8, multiplier: 1 });
+      const success = await submitDrawing(dataUrl);
+      
+      if (success) {
+        setHasSubmitted(true);
+        // Disable canvas after submission
+        fabricCanvas.isDrawingMode = false;
+      }
+    } catch (err) {
+      console.error('Submit error:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [fabricCanvas, hasSubmitted, isSubmitting, submitDrawing]);
 
-  const handleVote = async (drawingId: string) => {
+  const handleVote = useCallback(async (drawingId: string) => {
     if (votedId) return;
-    await castVote(drawingId);
-    setVotedId(drawingId);
-  };
+    const success = await castVote(drawingId);
+    if (success) {
+      setVotedId(drawingId);
+    }
+  }, [votedId, castVote]);
 
-  // Auto-submit when time runs out
+  // Auto-submit when time runs out - this is a client-side fallback
+  // Server should handle the authoritative transition
   const handleTimeComplete = useCallback(() => {
-    if (room?.status === "drawing" && !hasSubmitted) {
+    if (room?.status === "drawing" && !hasSubmitted && !isSubmitting) {
       handleSubmit();
     }
-  }, [room?.status, hasSubmitted, handleSubmit]);
+  }, [room?.status, hasSubmitted, isSubmitting, handleSubmit]);
+
+  // Reset state on round/status change
+  useEffect(() => {
+    if (room?.status === 'drawing') {
+      setVotedId(null);
+      // Don't reset hasSubmitted here - check from server
+    } else if (room?.status === 'voting') {
+      setVotedId(null);
+    }
+  }, [room?.status, room?.current_round]);
 
   // Navigate to results when game ends
   useEffect(() => {
@@ -94,7 +212,37 @@ const Game = () => {
     }
   }, [room?.status, code, navigate]);
 
-  if (!room) return <div className="min-h-screen flex items-center justify-center"><p>Loading...</p></div>;
+  // Loading state
+  if (roomLoadingState === 'loading') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
+        <Loader2 className="w-12 h-12 animate-spin text-primary" />
+        <p className="text-xl font-display">Loading game...</p>
+      </div>
+    );
+  }
+
+  // Error state
+  if (roomLoadingState === 'error') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
+        <AlertCircle className="w-12 h-12 text-destructive" />
+        <p className="text-xl font-display text-destructive">{error || 'Failed to load game'}</p>
+        <SketchButton onClick={() => navigate('/')}>
+          Go Home
+        </SketchButton>
+      </div>
+    );
+  }
+
+  if (!room) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
+        <Loader2 className="w-12 h-12 animate-spin text-primary" />
+        <p className="text-xl font-display">Loading...</p>
+      </div>
+    );
+  }
 
   const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
 
@@ -142,35 +290,99 @@ const Game = () => {
                             activeColor === color && tool === "pen" && "ring-2 ring-offset-2 ring-primary scale-110"
                           )}
                           style={{ backgroundColor: color }}
+                          disabled={hasSubmitted}
                         />
                       ))}
                     </div>
                     <div className="flex gap-2 ml-auto">
-                      <SketchButton size="icon" variant={tool === "pen" ? "default" : "outline"} onClick={() => setTool("pen")}>
+                      <SketchButton 
+                        size="icon" 
+                        variant={tool === "pen" ? "default" : "outline"} 
+                        onClick={() => setTool("pen")}
+                        disabled={hasSubmitted}
+                      >
                         <Pencil />
                       </SketchButton>
-                      <SketchButton size="icon" variant={tool === "eraser" ? "default" : "outline"} onClick={() => setTool("eraser")}>
+                      <SketchButton 
+                        size="icon" 
+                        variant={tool === "eraser" ? "default" : "outline"} 
+                        onClick={() => setTool("eraser")}
+                        disabled={hasSubmitted}
+                      >
                         <Eraser />
                       </SketchButton>
-                      <SketchButton size="icon" variant="outline" onClick={handleUndo}>
+                      <SketchButton 
+                        size="icon" 
+                        variant="outline" 
+                        onClick={handleUndo}
+                        disabled={hasSubmitted}
+                      >
                         <Undo />
                       </SketchButton>
-                      <SketchButton size="icon" variant="destructive" onClick={handleClear}>
+                      <SketchButton 
+                        size="icon" 
+                        variant="destructive" 
+                        onClick={handleClear}
+                        disabled={hasSubmitted}
+                      >
                         <Trash2 />
                       </SketchButton>
+                      {!canvasInitialized && !hasSubmitted && (
+                        <SketchButton 
+                          size="icon" 
+                          variant="outline" 
+                          onClick={reinitializeCanvas}
+                          title="Reinitialize canvas"
+                        >
+                          <AlertCircle className="text-warning" />
+                        </SketchButton>
+                      )}
                     </div>
                   </div>
                   
-                  {/* Canvas */}
-                  <div className="border-3 border-foreground rounded-xl overflow-hidden bg-canvas mx-auto" style={{ maxWidth: 600 }}>
-                    <canvas ref={canvasRef} className="w-full" />
+                  {/* Canvas Container - ensure pointer events work */}
+                  <div 
+                    ref={canvasContainerRef}
+                    className="border-3 border-foreground rounded-xl overflow-hidden bg-canvas mx-auto relative"
+                    style={{ 
+                      maxWidth: 600, 
+                      touchAction: 'none',
+                      pointerEvents: hasSubmitted ? 'none' : 'auto'
+                    }}
+                  >
+                    <canvas 
+                      ref={canvasRef} 
+                      className="w-full"
+                      style={{ 
+                        touchAction: 'none',
+                        pointerEvents: hasSubmitted ? 'none' : 'auto'
+                      }}
+                    />
+                    {hasSubmitted && (
+                      <div className="absolute inset-0 bg-background/50 flex items-center justify-center">
+                        <p className="text-lg font-display text-success">Submitted ✓</p>
+                      </div>
+                    )}
                   </div>
                   
                   {hasSubmitted ? (
                     <p className="text-center mt-4 text-success font-display">Drawing submitted! ✓</p>
                   ) : (
-                    <SketchButton variant="success" size="lg" className="w-full mt-4" onClick={handleSubmit}>
-                      Submit Drawing
+                    <SketchButton 
+                      variant="success" 
+                      size="lg" 
+                      className="w-full mt-4" 
+                      onClick={handleSubmit}
+                      disabled={isSubmitting}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                          Submitting...
+                        </>
+                      ) : (
+                        'Submit Drawing'
+                      )}
                     </SketchButton>
                   )}
                 </SketchCardContent>
@@ -194,7 +406,7 @@ const Game = () => {
                           transition={{ delay: i * 0.1 }}
                           className={cn(
                             "border-3 border-foreground rounded-xl overflow-hidden bg-canvas cursor-pointer transition-transform",
-                            room.status === "voting" && !isOwn && "hover:scale-105",
+                            room.status === "voting" && !isOwn && !votedId && "hover:scale-105",
                             votedId === drawing.id && "ring-4 ring-success"
                           )}
                           onClick={() => room.status === "voting" && !isOwn && handleVote(drawing.id)}
@@ -209,6 +421,11 @@ const Game = () => {
                       );
                     })}
                   </div>
+                  {drawings.length === 0 && (
+                    <p className="text-center text-muted-foreground py-8">
+                      Waiting for drawings...
+                    </p>
+                  )}
                 </SketchCardContent>
               </SketchCard>
             )}
