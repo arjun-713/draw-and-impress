@@ -266,6 +266,10 @@ export type Database = {
         Returns: boolean
       }
       cleanup_old_rate_limits: { Args: never; Returns: undefined }
+      increment_player_score: {
+        Args: { p_player_id: string; p_points: number }
+        Returns: undefined
+      }
       record_rate_limit_action: {
         Args: { p_action_type: string; p_room_id?: string; p_user_id: string }
         Returns: undefined

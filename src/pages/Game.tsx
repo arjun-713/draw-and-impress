@@ -9,6 +9,7 @@ import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { Timer } from "@/components/game/Timer";
 import { useRoom } from "@/hooks/useRoom";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
 
 const COLORS = ["#1a1a2e", "#FF6B6B", "#4ECDC4", "#FFE66D", "#95E1D3", "#F38181", "#AA96DA", "#FF9F43", "#6C5CE7"];
 
@@ -187,19 +188,52 @@ const Game = () => {
     }
   }, [votedId, castVote]);
 
+  // Trigger phase transition check - called when timer completes
+  const checkPhaseTransition = useCallback(async () => {
+    if (!room?.id) return;
+    
+    try {
+      // Call edge function to check/trigger phase transitions
+      await supabase.functions.invoke('game-manager', {
+        body: { action: 'transition_room', roomId: room.id }
+      });
+    } catch (err) {
+      console.error('Error checking phase transition:', err);
+    }
+  }, [room?.id]);
+
   // Auto-submit when time runs out - this is a client-side fallback
   // Server should handle the authoritative transition
-  const handleTimeComplete = useCallback(() => {
+  const handleTimeComplete = useCallback(async () => {
     if (room?.status === "drawing" && !hasSubmitted && !isSubmitting) {
-      handleSubmit();
+      await handleSubmit();
     }
-  }, [room?.status, hasSubmitted, isSubmitting, handleSubmit]);
+    // Always try to trigger phase transition when timer completes
+    await checkPhaseTransition();
+  }, [room?.status, hasSubmitted, isSubmitting, handleSubmit, checkPhaseTransition]);
+
+  // Poll for phase transitions in case timer is out of sync
+  useEffect(() => {
+    if (!room?.id || room.status === 'lobby' || room.status === 'finished') return;
+    
+    // Check every 5 seconds if phase should transition
+    const interval = setInterval(() => {
+      if (room.phase_end_at) {
+        const endTime = new Date(room.phase_end_at).getTime();
+        if (Date.now() > endTime + 2000) { // 2 second grace period
+          checkPhaseTransition();
+        }
+      }
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [room?.id, room?.status, room?.phase_end_at, checkPhaseTransition]);
 
   // Reset state on round/status change
   useEffect(() => {
     if (room?.status === 'drawing') {
       setVotedId(null);
-      // Don't reset hasSubmitted here - check from server
+      setHasSubmitted(false); // Reset for new round
     } else if (room?.status === 'voting') {
       setVotedId(null);
     }
