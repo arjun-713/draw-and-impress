@@ -1,5 +1,6 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import "https://deno.land/x/xhr@0.1.0/mod.ts";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -24,7 +25,7 @@ interface Drawing {
   vote_count: number;
 }
 
-Deno.serve(async (req) => {
+serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -89,17 +90,18 @@ Deno.serve(async (req) => {
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Error in game-manager:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
 
 async function transitionRoom(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   room: Room
 ): Promise<{ roomId: string; from: string; to: string } | null> {
   const { id, status, current_round, total_rounds, draw_time, vote_time } = room;
@@ -180,7 +182,7 @@ async function transitionRoom(
 }
 
 async function updateScoresFromVotes(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   roomId: string,
   round: number
 ): Promise<void> {
@@ -216,7 +218,7 @@ async function updateScoresFromVotes(
         if (player) {
           await supabase
             .from('players')
-            .update({ score: player.score + drawing.vote_count })
+            .update({ score: (player.score || 0) + drawing.vote_count })
             .eq('id', drawing.player_id);
         }
       }
