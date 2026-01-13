@@ -69,7 +69,7 @@ const Game = () => {
 
   const handleSubmit = useCallback(async () => {
     if (!fabricCanvas || hasSubmitted) return;
-    const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8 });
+    const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8, multiplier: 1 });
     await submitDrawing(dataUrl);
     setHasSubmitted(true);
   }, [fabricCanvas, hasSubmitted, submitDrawing]);
