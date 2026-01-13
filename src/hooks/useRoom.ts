@@ -279,8 +279,8 @@ export const useRoom = () => {
       return;
     }
     
-    // Cast vote
-    await supabase
+    // Cast vote - vote_count is automatically updated by database trigger
+    const { error: voteError } = await supabase
       .from('votes')
       .insert({
         room_id: room.id,
@@ -289,13 +289,21 @@ export const useRoom = () => {
         round: room.current_round,
       });
     
-    // Increment vote count on drawing
-    const currentDrawing = drawings.find(d => d.id === drawingId);
-    if (currentDrawing) {
-      await supabase
-        .from('drawings')
-        .update({ vote_count: currentDrawing.vote_count + 1 })
-        .eq('id', drawingId);
+    if (voteError) {
+      // Handle duplicate vote attempts (UNIQUE constraint violation)
+      if (voteError.code === '23505') {
+        toast({
+          variant: 'destructive',
+          title: 'Already voted',
+          description: 'You can only vote once per round',
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Vote failed',
+          description: voteError.message,
+        });
+      }
     }
     
   }, [room?.id, room?.current_round, playerId, toast]);
