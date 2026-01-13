@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware';
 export interface Player {
   id: string;
   session_id: string;
+  user_id: string;
   username: string;
   avatar_color: string;
   score: number;
@@ -35,12 +36,10 @@ export interface Room {
 }
 
 interface GameState {
-  sessionId: string | null;
   playerId: string | null;
   roomCode: string | null;
   username: string | null;
   
-  setSession: (sessionId: string) => void;
   setPlayer: (playerId: string, username: string) => void;
   setRoom: (roomCode: string) => void;
   clearGame: () => void;
@@ -49,12 +48,10 @@ interface GameState {
 export const useGameStore = create<GameState>()(
   persist(
     (set) => ({
-      sessionId: null,
       playerId: null,
       roomCode: null,
       username: null,
       
-      setSession: (sessionId) => set({ sessionId }),
       setPlayer: (playerId, username) => set({ playerId, username }),
       setRoom: (roomCode) => set({ roomCode }),
       clearGame: () => set({ playerId: null, roomCode: null, username: null }),
@@ -64,16 +61,6 @@ export const useGameStore = create<GameState>()(
     }
   )
 );
-
-// Generate a unique session ID for anonymous players
-export const generateSessionId = (): string => {
-  const existing = localStorage.getItem('draw-session-id');
-  if (existing) return existing;
-  
-  const newId = crypto.randomUUID();
-  localStorage.setItem('draw-session-id', newId);
-  return newId;
-};
 
 // Generate a random room code
 export const generateRoomCode = (): string => {

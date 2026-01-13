@@ -70,6 +70,7 @@ export type Database = {
           room_id: string
           score: number
           session_id: string
+          user_id: string | null
           username: string
         }
         Insert: {
@@ -82,6 +83,7 @@ export type Database = {
           room_id: string
           score?: number
           session_id: string
+          user_id?: string | null
           username: string
         }
         Update: {
@@ -94,6 +96,7 @@ export type Database = {
           room_id?: string
           score?: number
           session_id?: string
+          user_id?: string | null
           username?: string
         }
         Relationships: [

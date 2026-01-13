@@ -1,24 +1,19 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { useGameStore, Room, Player, Drawing, generateSessionId, getRandomAvatarColor, generateRoomCode } from '@/lib/gameStore';
+import { useGameStore, Room, Player, Drawing, getRandomAvatarColor, generateRoomCode } from '@/lib/gameStore';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/useAuth';
 
 export const useRoom = () => {
   const { toast } = useToast();
-  const { sessionId, setSession, playerId, setPlayer, roomCode, setRoom, clearGame } = useGameStore();
+  const { userId, loading: authLoading } = useAuth();
+  const { playerId, setPlayer, roomCode, setRoom, clearGame } = useGameStore();
   
   const [room, setRoomState] = useState<Room | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Initialize session on mount
-  useEffect(() => {
-    if (!sessionId) {
-      setSession(generateSessionId());
-    }
-  }, [sessionId, setSession]);
 
   // Fetch room data
   const fetchRoom = useCallback(async (code: string) => {
@@ -58,19 +53,22 @@ export const useRoom = () => {
 
   // Create a new room
   const createRoom = useCallback(async (username: string): Promise<string> => {
+    if (!userId) {
+      throw new Error('Not authenticated');
+    }
+    
     setLoading(true);
     setError(null);
     
     try {
       const code = generateRoomCode();
-      const hostId = sessionId || generateSessionId();
       
-      // Create room
+      // Create room with auth.uid() as host_id
       const { data: roomData, error: roomError } = await supabase
         .from('rooms')
         .insert({
           code,
-          host_id: hostId,
+          host_id: userId,
           status: 'lobby',
         })
         .select()
@@ -78,12 +76,13 @@ export const useRoom = () => {
       
       if (roomError) throw roomError;
       
-      // Create player (host)
+      // Create player (host) with user_id for RLS
       const { data: playerData, error: playerError } = await supabase
         .from('players')
         .insert({
           room_id: roomData.id,
-          session_id: hostId,
+          session_id: userId,
+          user_id: userId,
           username,
           avatar_color: getRandomAvatarColor(),
           is_host: true,
@@ -93,7 +92,6 @@ export const useRoom = () => {
       
       if (playerError) throw playerError;
       
-      setSession(hostId);
       setPlayer(playerData.id, username);
       setRoom(code);
       setRoomState(roomData as Room);
@@ -110,10 +108,14 @@ export const useRoom = () => {
     } finally {
       setLoading(false);
     }
-  }, [sessionId, setSession, setPlayer, setRoom, toast]);
+  }, [userId, setPlayer, setRoom, toast]);
 
   // Join an existing room
   const joinRoom = useCallback(async (code: string, username: string): Promise<void> => {
+    if (!userId) {
+      throw new Error('Not authenticated');
+    }
+    
     setLoading(true);
     setError(null);
     
@@ -134,10 +136,8 @@ export const useRoom = () => {
         throw new Error('Room is full');
       }
       
-      const playerSessionId = sessionId || generateSessionId();
-      
-      // Check if player already in room
-      const existingPlayer = currentPlayers.find(p => p.session_id === playerSessionId);
+      // Check if player already in room using user_id
+      const existingPlayer = currentPlayers.find(p => p.user_id === userId);
       
       if (existingPlayer) {
         setPlayer(existingPlayer.id, existingPlayer.username);
@@ -146,12 +146,13 @@ export const useRoom = () => {
         return;
       }
       
-      // Create new player
+      // Create new player with user_id for RLS
       const { data: playerData, error: playerError } = await supabase
         .from('players')
         .insert({
           room_id: roomData.id,
-          session_id: playerSessionId,
+          session_id: userId,
+          user_id: userId,
           username,
           avatar_color: getRandomAvatarColor(),
         })
@@ -160,7 +161,6 @@ export const useRoom = () => {
       
       if (playerError) throw playerError;
       
-      setSession(playerSessionId);
       setPlayer(playerData.id, username);
       setRoom(code.toUpperCase());
       setRoomState(roomData);
@@ -176,7 +176,7 @@ export const useRoom = () => {
     } finally {
       setLoading(false);
     }
-  }, [sessionId, setSession, setPlayer, setRoom, fetchRoom, fetchPlayers, toast]);
+  }, [userId, setPlayer, setRoom, fetchRoom, fetchPlayers, toast]);
 
   // Leave room
   const leaveRoom = useCallback(async () => {
@@ -310,7 +310,7 @@ export const useRoom = () => {
 
   // Subscribe to realtime updates
   useEffect(() => {
-    if (!roomCode) return;
+    if (!roomCode || authLoading) return;
     
     const loadInitialData = async () => {
       try {
@@ -381,16 +381,16 @@ export const useRoom = () => {
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(drawingsChannel);
     };
-  }, [roomCode, room?.id, room?.current_round, fetchRoom, fetchPlayers, fetchDrawings]);
+  }, [roomCode, room?.id, room?.current_round, authLoading, fetchRoom, fetchPlayers, fetchDrawings]);
 
   return {
     room,
     players,
     drawings,
-    loading,
+    loading: loading || authLoading,
     error,
     playerId,
-    sessionId,
+    userId,
     createRoom,
     joinRoom,
     leaveRoom,
