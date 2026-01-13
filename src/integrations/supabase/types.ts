@@ -130,6 +130,30 @@ export type Database = {
         }
         Relationships: []
       }
+      rate_limits: {
+        Row: {
+          action_type: string
+          created_at: string
+          id: string
+          room_id: string | null
+          user_id: string
+        }
+        Insert: {
+          action_type: string
+          created_at?: string
+          id?: string
+          room_id?: string | null
+          user_id: string
+        }
+        Update: {
+          action_type?: string
+          created_at?: string
+          id?: string
+          room_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       rooms: {
         Row: {
           code: string
@@ -232,7 +256,20 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      check_rate_limit: {
+        Args: {
+          p_action_type: string
+          p_max_count: number
+          p_user_id: string
+          p_window_seconds: number
+        }
+        Returns: boolean
+      }
+      cleanup_old_rate_limits: { Args: never; Returns: undefined }
+      record_rate_limit_action: {
+        Args: { p_action_type: string; p_room_id?: string; p_user_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       [_ in never]: never

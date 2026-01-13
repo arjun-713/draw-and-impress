@@ -1,8 +1,12 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useGameStore, Room, Player, Drawing, getRandomAvatarColor, generateRoomCode } from '@/lib/gameStore';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+
+type RoomLoadingState = 'idle' | 'loading' | 'joined' | 'error';
+
+const ROOM_LOAD_TIMEOUT = 8000; // 8 seconds
 
 export const useRoom = () => {
   const { toast } = useToast();
@@ -14,17 +18,22 @@ export const useRoom = () => {
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [roomLoadingState, setRoomLoadingState] = useState<RoomLoadingState>('idle');
+  
+  // Track if we've initialized to avoid duplicate fetches
+  const initRef = useRef(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Fetch room data
+  // Fetch room data by code
   const fetchRoom = useCallback(async (code: string) => {
     const { data, error } = await supabase
       .from('rooms')
       .select('*')
       .eq('code', code)
-      .single();
+      .maybeSingle();
     
     if (error) throw error;
-    return data as Room;
+    return data as Room | null;
   }, []);
 
   // Fetch players in room
@@ -50,6 +59,21 @@ export const useRoom = () => {
     if (error) throw error;
     return data as Drawing[];
   }, []);
+
+  // Check if user is already in room
+  const checkUserInRoom = useCallback(async (roomId: string): Promise<Player | null> => {
+    if (!userId) return null;
+    
+    const { data, error } = await supabase
+      .from('players')
+      .select('*')
+      .eq('room_id', roomId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    if (error) return null;
+    return data as Player | null;
+  }, [userId]);
 
   // Create a new room
   const createRoom = useCallback(async (username: string): Promise<string> => {
@@ -95,10 +119,12 @@ export const useRoom = () => {
       setPlayer(playerData.id, username);
       setRoom(code);
       setRoomState(roomData as Room);
+      setRoomLoadingState('joined');
       
       return code;
     } catch (err: any) {
       setError(err.message);
+      setRoomLoadingState('error');
       toast({
         variant: 'destructive',
         title: 'Error creating room',
@@ -118,6 +144,7 @@ export const useRoom = () => {
     
     setLoading(true);
     setError(null);
+    setRoomLoadingState('loading');
     
     try {
       const roomData = await fetchRoom(code.toUpperCase());
@@ -143,6 +170,7 @@ export const useRoom = () => {
         setPlayer(existingPlayer.id, existingPlayer.username);
         setRoom(code.toUpperCase());
         setRoomState(roomData);
+        setRoomLoadingState('joined');
         return;
       }
       
@@ -164,9 +192,11 @@ export const useRoom = () => {
       setPlayer(playerData.id, username);
       setRoom(code.toUpperCase());
       setRoomState(roomData);
+      setRoomLoadingState('joined');
       
     } catch (err: any) {
       setError(err.message);
+      setRoomLoadingState('error');
       toast({
         variant: 'destructive',
         title: 'Error joining room',
@@ -177,6 +207,71 @@ export const useRoom = () => {
       setLoading(false);
     }
   }, [userId, setPlayer, setRoom, fetchRoom, fetchPlayers, toast]);
+
+  // Rejoin room from URL (for direct links / refresh)
+  const rejoinRoom = useCallback(async (code: string): Promise<boolean> => {
+    if (!userId || authLoading) return false;
+    
+    setRoomLoadingState('loading');
+    setError(null);
+    
+    // Set up timeout
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      if (roomLoadingState === 'loading') {
+        setRoomLoadingState('error');
+        setError('Room loading timed out');
+      }
+    }, ROOM_LOAD_TIMEOUT);
+    
+    try {
+      const roomData = await fetchRoom(code.toUpperCase());
+      
+      if (!roomData) {
+        setRoomLoadingState('error');
+        setError('Room not found');
+        return false;
+      }
+      
+      // Check if user is in this room
+      const existingPlayer = await checkUserInRoom(roomData.id);
+      
+      if (!existingPlayer) {
+        // User not in room - they can join if it's in lobby
+        if (roomData.status === 'lobby') {
+          setRoomLoadingState('idle'); // Allow join form to show
+          setRoomState(roomData);
+          return false;
+        } else {
+          setRoomLoadingState('error');
+          setError('Game in progress - you are not a participant');
+          return false;
+        }
+      }
+      
+      // User is in room - restore their session
+      setPlayer(existingPlayer.id, existingPlayer.username);
+      setRoom(code.toUpperCase());
+      setRoomState(roomData);
+      setPlayers(await fetchPlayers(roomData.id));
+      
+      if (roomData.current_round > 0) {
+        const drawingsData = await fetchDrawings(roomData.id, roomData.current_round);
+        setDrawings(drawingsData);
+      }
+      
+      setRoomLoadingState('joined');
+      
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      return true;
+      
+    } catch (err: any) {
+      console.error('Error rejoining room:', err);
+      setRoomLoadingState('error');
+      setError(err.message);
+      return false;
+    }
+  }, [userId, authLoading, fetchRoom, fetchPlayers, fetchDrawings, checkUserInRoom, setPlayer, setRoom, roomLoadingState]);
 
   // Leave room
   const leaveRoom = useCallback(async () => {
@@ -191,6 +286,7 @@ export const useRoom = () => {
       clearGame();
       setRoomState(null);
       setPlayers([]);
+      setRoomLoadingState('idle');
     } catch (err: any) {
       console.error('Error leaving room:', err);
     }
@@ -244,88 +340,140 @@ export const useRoom = () => {
       .eq('id', room.id);
   }, [room]);
 
-  // Submit drawing
-  const submitDrawing = useCallback(async (imageData: string) => {
-    if (!room?.id || !playerId) return;
+  // Submit drawing with idempotency
+  const submitDrawing = useCallback(async (imageData: string): Promise<boolean> => {
+    if (!room?.id || !playerId) return false;
     
-    await supabase
-      .from('drawings')
-      .insert({
-        room_id: room.id,
-        player_id: playerId,
-        round: room.current_round,
-        image_data: imageData,
-      });
-  }, [room?.id, room?.current_round, playerId]);
-
-  // Cast vote
-  const castVote = useCallback(async (drawingId: string) => {
-    if (!room?.id || !playerId) return;
-    
-    // Check if already voted
-    const { data: existingVote } = await supabase
-      .from('votes')
-      .select('id')
-      .eq('voter_id', playerId)
-      .eq('round', room.current_round)
-      .single();
-    
-    if (existingVote) {
+    try {
+      // Use upsert to handle duplicate submissions gracefully
+      const { error: drawingError } = await supabase
+        .from('drawings')
+        .upsert({
+          room_id: room.id,
+          player_id: playerId,
+          round: room.current_round,
+          image_data: imageData,
+        }, {
+          onConflict: 'player_id,room_id,round',
+          ignoreDuplicates: false
+        });
+      
+      if (drawingError) {
+        // If it's a duplicate error, consider it a success (already submitted)
+        if (drawingError.code === '23505') {
+          return true;
+        }
+        throw drawingError;
+      }
+      
+      return true;
+    } catch (err: any) {
+      console.error('Error submitting drawing:', err);
       toast({
         variant: 'destructive',
-        title: 'Already voted',
-        description: 'You can only vote once per round',
+        title: 'Submission failed',
+        description: err.message,
       });
-      return;
+      return false;
     }
-    
-    // Cast vote - vote_count is automatically updated by database trigger
-    const { error: voteError } = await supabase
-      .from('votes')
-      .insert({
-        room_id: room.id,
-        voter_id: playerId,
-        drawing_id: drawingId,
-        round: room.current_round,
-      });
-    
-    if (voteError) {
-      // Handle duplicate vote attempts (UNIQUE constraint violation)
-      if (voteError.code === '23505') {
-        toast({
-          variant: 'destructive',
-          title: 'Already voted',
-          description: 'You can only vote once per round',
-        });
-      } else {
-        toast({
-          variant: 'destructive',
-          title: 'Vote failed',
-          description: voteError.message,
-        });
-      }
-    }
-    
   }, [room?.id, room?.current_round, playerId, toast]);
 
-  // Subscribe to realtime updates
+  // Cast vote
+  const castVote = useCallback(async (drawingId: string): Promise<boolean> => {
+    if (!room?.id || !playerId) return false;
+    
+    try {
+      // Cast vote - vote_count is automatically updated by database trigger
+      const { error: voteError } = await supabase
+        .from('votes')
+        .insert({
+          room_id: room.id,
+          voter_id: playerId,
+          drawing_id: drawingId,
+          round: room.current_round,
+        });
+      
+      if (voteError) {
+        // Handle duplicate vote attempts (UNIQUE constraint violation)
+        if (voteError.code === '23505') {
+          toast({
+            variant: 'destructive',
+            title: 'Already voted',
+            description: 'You can only vote once per round',
+          });
+          return false;
+        }
+        throw voteError;
+      }
+      
+      return true;
+    } catch (err: any) {
+      console.error('Error casting vote:', err);
+      toast({
+        variant: 'destructive',
+        title: 'Vote failed',
+        description: err.message,
+      });
+      return false;
+    }
+  }, [room?.id, room?.current_round, playerId, toast]);
+
+  // Check if current player has submitted for current round
+  const checkHasSubmitted = useCallback(async (): Promise<boolean> => {
+    if (!room?.id || !playerId || room.current_round <= 0) return false;
+    
+    const { data } = await supabase
+      .from('drawings')
+      .select('id')
+      .eq('room_id', room.id)
+      .eq('player_id', playerId)
+      .eq('round', room.current_round)
+      .maybeSingle();
+    
+    return !!data;
+  }, [room?.id, room?.current_round, playerId]);
+
+  // Subscribe to realtime updates - with proper cleanup
   useEffect(() => {
-    if (!roomCode || authLoading) return;
+    if (!roomCode || authLoading || !userId) return;
+    
+    // Avoid duplicate initialization
+    if (initRef.current) return;
+    initRef.current = true;
     
     const loadInitialData = async () => {
       try {
+        setRoomLoadingState('loading');
         const roomData = await fetchRoom(roomCode);
+        
+        if (!roomData) {
+          setRoomLoadingState('error');
+          setError('Room not found');
+          return;
+        }
+        
         setRoomState(roomData);
         
         const playersData = await fetchPlayers(roomData.id);
         setPlayers(playersData);
         
+        // Verify current user is in room
+        const isUserInRoom = playersData.some(p => p.user_id === userId);
+        if (!isUserInRoom) {
+          setRoomLoadingState('idle'); // Can show join form
+          return;
+        }
+        
         if (roomData.current_round > 0) {
           const drawingsData = await fetchDrawings(roomData.id, roomData.current_round);
           setDrawings(drawingsData);
         }
-      } catch (err) {
+        
+        setRoomLoadingState('joined');
+      } catch (err: any) {
         console.error('Error loading room data:', err);
+        setRoomLoadingState('error');
+        setError(err.message);
       }
     };
     
@@ -345,17 +493,20 @@ export const useRoom = () => {
       )
       .subscribe();
     
-    // Subscribe to player changes
+    // Subscribe to player changes - refetch on any change
     const playersChannel = supabase
       .channel(`players-${roomCode}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'players' },
         async () => {
-          // Refetch players on any change
           if (room?.id) {
-            const playersData = await fetchPlayers(room.id);
-            setPlayers(playersData);
+            try {
+              const playersData = await fetchPlayers(room.id);
+              setPlayers(playersData);
+            } catch (err) {
+              console.error('Error refetching players:', err);
+            }
           }
         }
       )
@@ -369,19 +520,32 @@ export const useRoom = () => {
         { event: '*', schema: 'public', table: 'drawings' },
         async () => {
           if (room?.id && room.current_round > 0) {
-            const drawingsData = await fetchDrawings(room.id, room.current_round);
-            setDrawings(drawingsData);
+            try {
+              const drawingsData = await fetchDrawings(room.id, room.current_round);
+              setDrawings(drawingsData);
+            } catch (err) {
+              console.error('Error refetching drawings:', err);
+            }
           }
         }
       )
       .subscribe();
     
     return () => {
+      initRef.current = false;
       supabase.removeChannel(roomChannel);
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(drawingsChannel);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
-  }, [roomCode, room?.id, room?.current_round, authLoading, fetchRoom, fetchPlayers, fetchDrawings]);
+  }, [roomCode, room?.id, room?.current_round, authLoading, userId, fetchRoom, fetchPlayers, fetchDrawings]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   return {
     room,
@@ -391,13 +555,16 @@ export const useRoom = () => {
     error,
     playerId,
     userId,
+    roomLoadingState,
     createRoom,
     joinRoom,
+    rejoinRoom,
     leaveRoom,
     toggleReady,
     updateSettings,
     startGame,
     submitDrawing,
     castVote,
+    checkHasSubmitted,
   };
 };
