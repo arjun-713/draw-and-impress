@@ -61,11 +61,20 @@ const Game = () => {
 
   // Initialize canvas - with proper DOM availability check
   useEffect(() => {
-    if (!canvasRef.current || fabricCanvas || room?.status !== 'drawing' || hasSubmitted) return;
+    // Don't initialize if conditions aren't met
+    if (!canvasRef.current || room?.status !== 'drawing' || hasSubmitted) return;
     
-    // Defer canvas initialization to ensure DOM is ready
-    const initCanvas = () => {
-      if (!canvasRef.current) return;
+    // Don't re-initialize if already initialized
+    if (fabricCanvas) return;
+    
+    console.log('Initializing Fabric.js canvas...');
+    
+    // Small delay to ensure DOM is fully rendered
+    const timeoutId = setTimeout(() => {
+      if (!canvasRef.current) {
+        console.error('Canvas ref not available');
+        return;
+      }
       
       try {
         const canvas = new FabricCanvas(canvasRef.current, {
@@ -76,58 +85,55 @@ const Game = () => {
           selection: false,
         });
         
-        // Set up brush
-        const brush = new PencilBrush(canvas);
-        brush.color = activeColor;
-        brush.width = 4;
-        canvas.freeDrawingBrush = brush;
-        
-        // Ensure canvas accepts pointer events
-        const canvasEl = canvas.getElement();
-        if (canvasEl) {
-          canvasEl.style.touchAction = 'none';
-          canvasEl.style.pointerEvents = 'auto';
+        // Initialize the freeDrawingBrush right after canvas creation (Fabric.js v6 pattern)
+        if (canvas.freeDrawingBrush) {
+          canvas.freeDrawingBrush.color = activeColor;
+          canvas.freeDrawingBrush.width = 4;
+        } else {
+          // Create brush if not auto-initialized
+          const brush = new PencilBrush(canvas);
+          brush.color = activeColor;
+          brush.width = 4;
+          canvas.freeDrawingBrush = brush;
         }
         
-        // Also set on wrapper
-        const wrapper = canvasEl?.parentElement;
-        if (wrapper) {
-          wrapper.style.touchAction = 'none';
-          wrapper.style.pointerEvents = 'auto';
-        }
+        // Force enable drawing mode
+        canvas.isDrawingMode = true;
+        
+        console.log('Canvas initialized successfully, isDrawingMode:', canvas.isDrawingMode);
         
         setFabricCanvas(canvas);
         setCanvasInitialized(true);
         
       } catch (err) {
         console.error('Canvas initialization error:', err);
-        // Retry after a short delay
-        setTimeout(initCanvas, 100);
       }
-    };
-    
-    // Use requestAnimationFrame to ensure DOM is painted
-    requestAnimationFrame(() => {
-      initCanvas();
-    });
+    }, 100);
     
     return () => {
-      if (fabricCanvas) {
-        fabricCanvas.dispose();
-        setFabricCanvas(null);
-        setCanvasInitialized(false);
-      }
+      clearTimeout(timeoutId);
     };
-  }, [room?.status, hasSubmitted]);
+  }, [room?.status, hasSubmitted, fabricCanvas, activeColor]);
 
-  // Cleanup canvas on unmount
+  // Cleanup canvas on unmount or when status changes away from drawing
   useEffect(() => {
     return () => {
       if (fabricCanvas) {
+        console.log('Disposing canvas...');
         fabricCanvas.dispose();
       }
     };
-  }, [fabricCanvas]);
+  }, []);
+  
+  // Dispose canvas when leaving drawing phase
+  useEffect(() => {
+    if (room?.status !== 'drawing' && fabricCanvas) {
+      console.log('Disposing canvas - no longer in drawing phase');
+      fabricCanvas.dispose();
+      setFabricCanvas(null);
+      setCanvasInitialized(false);
+    }
+  }, [room?.status]);
 
   // Update brush settings
   useEffect(() => {
@@ -157,6 +163,7 @@ const Game = () => {
     if (!fabricCanvas) return;
     fabricCanvas.clear();
     fabricCanvas.backgroundColor = "#ffffff";
+    fabricCanvas.renderAll();
   }, [fabricCanvas]);
 
   const handleSubmit = useCallback(async () => {
@@ -377,23 +384,25 @@ const Game = () => {
                   {/* Canvas Container - ensure pointer events work */}
                   <div 
                     ref={canvasContainerRef}
-                    className="border-3 border-foreground rounded-xl overflow-hidden bg-canvas mx-auto relative"
+                    className="border-3 border-foreground rounded-xl bg-white mx-auto relative"
                     style={{ 
-                      maxWidth: 600, 
-                      touchAction: 'none',
-                      pointerEvents: hasSubmitted ? 'none' : 'auto'
+                      width: 600,
+                      height: 450,
+                      touchAction: 'none'
                     }}
                   >
                     <canvas 
-                      ref={canvasRef} 
-                      className="w-full"
+                      ref={canvasRef}
+                      width={600}
+                      height={450}
                       style={{ 
+                        display: 'block',
                         touchAction: 'none',
-                        pointerEvents: hasSubmitted ? 'none' : 'auto'
+                        cursor: hasSubmitted ? 'default' : 'crosshair'
                       }}
                     />
                     {hasSubmitted && (
-                      <div className="absolute inset-0 bg-background/50 flex items-center justify-center">
+                      <div className="absolute inset-0 bg-background/50 flex items-center justify-center pointer-events-none">
                         <p className="text-lg font-display text-success">Submitted ✓</p>
                       </div>
                     )}
