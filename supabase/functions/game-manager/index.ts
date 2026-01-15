@@ -34,7 +34,7 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const { action, roomId } = await req.json();
@@ -42,14 +42,14 @@ serve(async (req) => {
     if (action === 'check_phase_transitions') {
       // Find all rooms that need phase transitions
       const now = new Date().toISOString();
-      
+
       const { data: expiredRooms, error: roomsError } = await supabase
         .from('rooms')
         .select('*')
         .not('status', 'in', '("lobby","finished")')
         .not('phase_end_at', 'is', null)
         .lt('phase_end_at', now);
-      
+
       if (roomsError) throw roomsError;
 
       const transitions: { roomId: string; from: string; to: string }[] = [];
@@ -74,7 +74,7 @@ serve(async (req) => {
         .select('*')
         .eq('id', roomId)
         .single();
-      
+
       if (roomError) throw roomError;
 
       const transition = await transitionRoom(supabase, room as Room);
@@ -123,7 +123,7 @@ async function transitionRoom(
       newStatus = 'results';
       // Give 10 seconds to view results
       newPhaseEndAt = new Date(Date.now() + 10000).toISOString();
-      
+
       // Update player scores based on votes
       await updateScoresFromVotes(supabase, id, current_round);
       break;
@@ -138,13 +138,13 @@ async function transitionRoom(
         newStatus = 'drawing';
         newRound = current_round + 1;
         newPhaseEndAt = new Date(Date.now() + draw_time * 1000).toISOString();
-        
+
         // Get a new random prompt
         const { data: prompts } = await supabase
           .from('prompts')
           .select('text')
           .limit(100);
-        
+
         if (prompts && prompts.length > 0) {
           newPrompt = prompts[Math.floor(Math.random() * prompts.length)].text;
         }
@@ -186,41 +186,66 @@ async function updateScoresFromVotes(
   roomId: string,
   round: number
 ): Promise<void> {
-  // Get all drawings for this round with their vote counts
-  const { data: drawings, error: drawingsError } = await supabase
-    .from('drawings')
-    .select('id, player_id, vote_count')
+  // Get all votes for this round
+  const { data: votes, error: votesError } = await supabase
+    .from('votes')
+    .select('drawing_id, rating, drawing:drawings(player_id)')
     .eq('room_id', roomId)
     .eq('round', round);
 
-  if (drawingsError || !drawings) {
-    console.error('Error fetching drawings for scoring:', drawingsError);
+  if (votesError || !votes) {
+    console.error('Error fetching votes for scoring:', votesError);
     return;
   }
 
-  // Update scores for each player based on votes received
-  // 1 point per vote received
-  for (const drawing of drawings as Drawing[]) {
-    if (drawing.vote_count > 0) {
-      const { error: scoreError } = await supabase.rpc('increment_player_score', {
-        p_player_id: drawing.player_id,
-        p_points: drawing.vote_count,
-      });
-      
-      if (scoreError) {
-        // Fallback: direct update
-        const { data: player } = await supabase
+  // Calculate scores per drawing/player
+  const scores: Record<string, number> = {};
+
+  // Group votes by drawing
+  const drawingVotes: Record<string, number[]> = {};
+
+  votes.forEach((v: any) => {
+    if (!v.drawing_id) return;
+    if (!drawingVotes[v.drawing_id]) drawingVotes[v.drawing_id] = [];
+    drawingVotes[v.drawing_id].push(v.rating || 0);
+  });
+
+  // Calculate Average * 10 (or similar scaling)
+  for (const [drawingId, ratings] of Object.entries(drawingVotes)) {
+    if (ratings.length === 0) continue;
+    const avg = ratings.reduce((a, b) => a + b, 0) / ratings.length;
+    const points = Math.round(avg * 100); // e.g. 4.5 stars -> 450 points
+
+    // Find player for this drawing
+    const vote = votes.find((v: any) => v.drawing_id === drawingId);
+    const playerId = vote?.drawing?.player_id;
+
+    if (playerId) {
+      if (!scores[playerId]) scores[playerId] = 0;
+      scores[playerId] += points;
+    }
+  }
+
+  // Update scores in DB
+  for (const [playerId, points] of Object.entries(scores)) {
+    const { error: scoreError } = await supabase.rpc('increment_player_score', {
+      p_player_id: playerId,
+      p_points: points,
+    });
+
+    if (scoreError) {
+      // Fallback
+      const { data: player } = await supabase
+        .from('players')
+        .select('score')
+        .eq('id', playerId)
+        .single();
+
+      if (player) {
+        await supabase
           .from('players')
-          .select('score')
-          .eq('id', drawing.player_id)
-          .single();
-        
-        if (player) {
-          await supabase
-            .from('players')
-            .update({ score: (player.score || 0) + drawing.vote_count })
-            .eq('id', drawing.player_id);
-        }
+          .update({ score: (player.score || 0) + points })
+          .eq('id', playerId);
       }
     }
   }

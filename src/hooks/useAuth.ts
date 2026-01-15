@@ -5,26 +5,44 @@ import type { User } from '@supabase/supabase-js';
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Get initial session
     const initAuth = async () => {
       try {
+        // 1. Try to get existing session
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session?.user) {
           setUser(session.user);
+          setUserId(session.user.id);
         } else {
-          // Sign in anonymously if no session exists
+          // 2. Try anonymous sign-in
           const { data, error } = await supabase.auth.signInAnonymously();
-          if (error) {
-            console.error('Anonymous sign-in error:', error);
-          } else {
+          if (!error && data.user) {
             setUser(data.user);
+            setUserId(data.user.id);
+          } else {
+            console.log('Anonymous auth disabled or failed, using local ID fallback');
+            // 3. Fallback: Generate/Get local ID
+            let localId = localStorage.getItem('draw_impress_anon_id');
+            if (!localId) {
+              localId = crypto.randomUUID();
+              localStorage.setItem('draw_impress_anon_id', localId);
+            }
+            setUserId(localId);
+            // Mock a user object if needed, or just leave null
           }
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
+        // Fallback on error
+        let localId = localStorage.getItem('draw_impress_anon_id');
+        if (!localId) {
+          localId = crypto.randomUUID();
+          localStorage.setItem('draw_impress_anon_id', localId);
+        }
+        setUserId(localId);
       } finally {
         setLoading(false);
       }
@@ -32,15 +50,11 @@ export const useAuth = () => {
 
     initAuth();
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        setUser(session?.user ?? null);
-        
-        // If signed out, sign in anonymously again
-        if (event === 'SIGNED_OUT') {
-          const { data } = await supabase.auth.signInAnonymously();
-          setUser(data.user ?? null);
+        if (session?.user) {
+          setUser(session.user);
+          setUserId(session.user.id);
         }
       }
     );
@@ -50,5 +64,5 @@ export const useAuth = () => {
     };
   }, []);
 
-  return { user, loading, userId: user?.id ?? null };
+  return { user, loading, userId };
 };
