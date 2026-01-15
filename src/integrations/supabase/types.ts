@@ -270,10 +270,16 @@ export type Database = {
         Args: { p_player_id: string; p_points: number }
         Returns: undefined
       }
+      is_room_host: { Args: { p_room_id: string }; Returns: boolean }
+      is_room_participant: {
+        Args: { p_room_id: string; p_user_id: string }
+        Returns: boolean
+      }
       record_rate_limit_action: {
         Args: { p_action_type: string; p_room_id?: string; p_user_id: string }
         Returns: undefined
       }
+      user_is_in_room: { Args: { p_room_id: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
