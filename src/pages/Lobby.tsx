@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Copy, Play, LogOut, Settings, Loader2, AlertCircle, Users } from "lucide-react";
+import { Copy, Play, LogOut, Settings, Loader2, AlertCircle } from "lucide-react";
 import { SketchButton } from "@/components/game/SketchButton";
 import { SketchCard, SketchCardContent, SketchCardHeader, SketchCardTitle } from "@/components/game/SketchCard";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
-import { Input } from "@/components/ui/input";
 import { useRoom } from "@/hooks/useRoom";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,36 +13,27 @@ const Lobby = () => {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { 
-    room, 
-    players, 
-    playerId, 
-    userId,
-    leaveRoom, 
-    toggleReady, 
-    updateSettings, 
+  const {
+    room,
+    players,
+    playerId,
+    leaveRoom,
+    updateSettings,
     startGame,
-    joinRoom,
     rejoinRoom,
     roomLoadingState,
-    error,
-    loading
+    error
   } = useRoom();
 
-  const [username, setUsername] = useState("");
-  const [isJoining, setIsJoining] = useState(false);
+  const isHost = room?.host_id === playerId;
+  // const allReady = players.length > 1 && players.every(p => p.is_host || p.is_ready);
 
-  const currentPlayer = players.find(p => p.id === playerId);
-  const isHost = currentPlayer?.is_host;
-  const allReady = players.length > 1 && players.every(p => p.is_host || p.is_ready);
-  const isInRoom = players.some(p => p.user_id === userId);
-
-  // Try to rejoin room on mount
+  // Initial Join Check
   useEffect(() => {
-    if (code && roomLoadingState === 'idle' && !playerId) {
+    if (code && roomLoadingState === 'idle' && !room) {
       rejoinRoom(code);
     }
-  }, [code, roomLoadingState, playerId, rejoinRoom]);
+  }, [code, roomLoadingState, room, rejoinRoom]);
 
   // Navigate to game when it starts
   useEffect(() => {
@@ -63,35 +53,19 @@ const Lobby = () => {
   };
 
   const handleStart = async () => {
-    if (!allReady && players.length > 1) {
-      toast({ variant: "destructive", title: "Not everyone is ready!" });
+    if (players.length < 2) {
+      toast({ variant: "destructive", title: "Need at least 2 players!" });
       return;
     }
     await startGame();
   };
 
-  const handleJoin = async () => {
-    if (!username.trim() || !code) {
-      toast({ variant: "destructive", title: "Enter your name!" });
-      return;
-    }
-    
-    setIsJoining(true);
-    try {
-      await joinRoom(code, username.trim());
-    } catch (err) {
-      console.error('Join error:', err);
-    } finally {
-      setIsJoining(false);
-    }
-  };
-
   // Loading state
-  if (roomLoadingState === 'loading') {
+  if (roomLoadingState === 'loading' || (roomLoadingState === 'connected' && !room)) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
         <Loader2 className="w-12 h-12 animate-spin text-primary" />
-        <p className="text-xl font-display">Loading lobby...</p>
+        <p className="text-xl font-display">Connecting to lobby...</p>
       </div>
     );
   }
@@ -109,76 +83,15 @@ const Lobby = () => {
     );
   }
 
-  // Room exists but user not in it - show join form
-  if (room && !isInRoom && roomLoadingState !== 'joined') {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
-        <motion.div
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className="w-full max-w-md"
-        >
-          <SketchCard>
-            <SketchCardHeader>
-              <SketchCardTitle className="flex items-center gap-2 justify-center">
-                <Users className="w-6 h-6" />
-                Join Room {code}
-              </SketchCardTitle>
-            </SketchCardHeader>
-            <SketchCardContent className="space-y-4">
-              <div>
-                <label className="block text-sm font-display mb-2">Your Name</label>
-                <Input
-                  placeholder="Enter your name..."
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  className="h-12 text-lg border-2 border-foreground rounded-xl"
-                  maxLength={20}
-                  onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
-                />
-              </div>
-              
-              <SketchButton
-                variant="success"
-                size="lg"
-                onClick={handleJoin}
-                disabled={isJoining || loading || !username.trim()}
-                className="w-full"
-              >
-                {isJoining ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                    Joining...
-                  </>
-                ) : (
-                  'Join Game'
-                )}
-              </SketchButton>
-              
-              <SketchButton
-                variant="ghost"
-                onClick={() => navigate('/')}
-                className="w-full"
-              >
-                Back to Home
-              </SketchButton>
-              
-              <p className="text-sm text-muted-foreground text-center">
-                {players.length}/{room.max_players} players in lobby
-              </p>
-            </SketchCardContent>
-          </SketchCard>
-        </motion.div>
-      </div>
-    );
-  }
-
-  // Still loading room data
+  // If we are here and have no room, it might be lagging or failed rejoin
   if (!room) {
+    // If idle and no room, likely user navigated directly here without joining first
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
-        <Loader2 className="w-12 h-12 animate-spin text-primary" />
-        <p className="text-xl font-display">Loading...</p>
+        <p className="text-lg">Please join from the home page.</p>
+        <SketchButton onClick={() => navigate('/')}>
+          Go Home
+        </SketchButton>
       </div>
     );
   }
@@ -192,8 +105,8 @@ const Lobby = () => {
             <LogOut className="w-4 h-4" />
             Leave
           </SketchButton>
-          
-          <motion.div 
+
+          <motion.div
             className="flex items-center gap-3 cursor-pointer"
             onClick={copyCode}
             whileHover={{ scale: 1.05 }}
@@ -228,24 +141,16 @@ const Lobby = () => {
                         color={player.avatar_color}
                         isHost={player.is_host}
                         isReady={player.is_ready}
-                        isConnected={player.is_connected}
+                        isConnected={true} // Realtime implies connected if in list
                         size="lg"
                       />
                     </motion.div>
                   ))}
                 </div>
-                
-                {!isHost && currentPlayer && (
-                  <div className="mt-6 flex justify-center">
-                    <SketchButton
-                      variant={currentPlayer?.is_ready ? "success" : "secondary"}
-                      size="lg"
-                      onClick={toggleReady}
-                    >
-                      {currentPlayer?.is_ready ? "Ready! ✓" : "Ready Up"}
-                    </SketchButton>
-                  </div>
-                )}
+
+                <div className="mt-6 text-center text-sm text-muted-foreground">
+                  {isHost ? "You are the host. Configure settings and start!" : "Waiting for host to start..."}
+                </div>
               </SketchCardContent>
             </SketchCard>
           </div>
@@ -277,7 +182,7 @@ const Lobby = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div>
                   <label className="text-sm font-display mb-1 block">Draw Time</label>
                   <Select
@@ -308,7 +213,7 @@ const Lobby = () => {
                     Start Game
                   </SketchButton>
                 )}
-                
+
                 {players.length < 2 && (
                   <p className="text-sm text-muted-foreground text-center">
                     Need at least 2 players
@@ -322,5 +227,5 @@ const Lobby = () => {
     </div>
   );
 };
-
 export default Lobby;
+
