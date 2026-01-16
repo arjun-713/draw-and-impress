@@ -520,42 +520,48 @@ export const useRoom = () => {
       .subscribe();
 
     // Subscribe to player changes - refetch on any change
-    const playersChannel = supabase
-      .channel(`players-${roomCode}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'players' },
-        async () => {
-          if (room?.id) {
-            try {
-              const playersData = await fetchPlayers(room.id);
-              setPlayers(playersData);
-            } catch (err) {
-              console.error('Error refetching players:', err);
+    let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+    if (room?.id) {
+      playersChannel = supabase
+        .channel(`players-${roomCode}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'players', filter: `room_id=eq.${room.id}` },
+          async () => {
+            if (room?.id) {
+              try {
+                const playersData = await fetchPlayers(room.id);
+                setPlayers(playersData);
+              } catch (err) {
+                console.error('Error refetching players:', err);
+              }
             }
           }
-        }
-      )
-      .subscribe();
+        )
+        .subscribe();
+    }
 
     // Subscribe to drawings
-    const drawingsChannel = supabase
-      .channel(`drawings-${roomCode}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'drawings' },
-        async () => {
-          if (room?.id && room.current_round > 0) {
-            try {
-              const drawingsData = await fetchDrawings(room.id, room.current_round);
-              setDrawings(drawingsData);
-            } catch (err) {
-              console.error('Error refetching drawings:', err);
+    let drawingsChannel: ReturnType<typeof supabase.channel> | null = null;
+    if (room?.id) {
+      drawingsChannel = supabase
+        .channel(`drawings-${roomCode}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'drawings', filter: `room_id=eq.${room.id}` },
+          async () => {
+            if (room?.id && room.current_round > 0) {
+              try {
+                const drawingsData = await fetchDrawings(room.id, room.current_round);
+                setDrawings(drawingsData);
+              } catch (err) {
+                console.error('Error refetching drawings:', err);
+              }
             }
           }
-        }
-      )
-      .subscribe();
+        )
+        .subscribe();
+    }
 
     // Subscribe to votes (for live rating updates)
     // Subscribe to votes (for live rating updates)
@@ -584,8 +590,8 @@ export const useRoom = () => {
     return () => {
       initRef.current = false;
       supabase.removeChannel(roomChannel);
-      supabase.removeChannel(playersChannel);
-      supabase.removeChannel(drawingsChannel);
+      if (playersChannel) supabase.removeChannel(playersChannel);
+      if (drawingsChannel) supabase.removeChannel(drawingsChannel);
       if (votesChannel) supabase.removeChannel(votesChannel);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
