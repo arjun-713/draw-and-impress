@@ -12,16 +12,28 @@ const Index = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { createRoom, joinRoom, loading } = useRoom();
-  
+
   const [username, setUsername] = useState("");
   const [roomCode, setRoomCode] = useState("");
-  const [mode, setMode] = useState<"home" | "create" | "join">("home");
+  const [secretKey, setSecretKey] = useState("");
 
-  const handleCreate = async () => {
+  // Modes: 'name' -> 'selection' -> 'create' | 'join'
+  const [mode, setMode] = useState<"name" | "selection" | "create" | "join">("name");
+
+  const handleNameSubmit = () => {
     if (!username.trim()) {
       toast({ variant: "destructive", title: "Enter your name!" });
       return;
     }
+    setMode("selection");
+  };
+
+  const handleCreate = async () => {
+    if (secretKey !== "impressMe") {
+      toast({ variant: "destructive", title: "Invalid Secret Key!", description: "You are not authorized to create a room." });
+      return;
+    }
+
     try {
       const code = await createRoom(username.trim());
       navigate(`/lobby/${code}`);
@@ -31,8 +43,8 @@ const Index = () => {
   };
 
   const handleJoin = async () => {
-    if (!username.trim() || !roomCode.trim()) {
-      toast({ variant: "destructive", title: "Fill in all fields!" });
+    if (!roomCode.trim()) {
+      toast({ variant: "destructive", title: "Enter a room code!" });
       return;
     }
     try {
@@ -46,21 +58,21 @@ const Index = () => {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
       {/* Floating decorations */}
-      <motion.div 
+      <motion.div
         className="absolute top-10 left-10 text-6xl"
         animate={{ y: [0, -10, 0], rotate: [0, 5, 0] }}
         transition={{ duration: 3, repeat: Infinity }}
       >
         ✏️
       </motion.div>
-      <motion.div 
+      <motion.div
         className="absolute top-20 right-20 text-5xl"
         animate={{ y: [0, -15, 0], rotate: [0, -5, 0] }}
         transition={{ duration: 4, repeat: Infinity, delay: 0.5 }}
       >
         🎨
       </motion.div>
-      <motion.div 
+      <motion.div
         className="absolute bottom-20 left-20 text-4xl"
         animate={{ y: [0, -8, 0] }}
         transition={{ duration: 2.5, repeat: Infinity, delay: 1 }}
@@ -86,8 +98,11 @@ const Index = () => {
 
         <SketchCard className="w-full">
           <SketchCardContent>
-            {mode === "home" && (
+
+            {/* STEP 1: NAME INPUT */}
+            {mode === "name" && (
               <div className="space-y-4">
+                <h2 className="text-2xl font-handwritten text-center">Who are you?</h2>
                 <div>
                   <label className="block text-sm font-display mb-2">Your Name</label>
                   <Input
@@ -96,19 +111,30 @@ const Index = () => {
                     onChange={(e) => setUsername(e.target.value)}
                     className="h-12 text-lg border-2 border-foreground rounded-xl"
                     maxLength={20}
+                    onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
                   />
                 </div>
-                
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <SketchButton
-                    variant="secondary"
-                    size="lg"
-                    onClick={() => setMode("create")}
-                    className="w-full"
-                  >
-                    <Pencil className="w-5 h-5" />
-                    Create
-                  </SketchButton>
+                <SketchButton
+                  variant="default"
+                  size="lg"
+                  onClick={handleNameSubmit}
+                  className="w-full"
+                  disabled={!username.trim()}
+                >
+                  Continue
+                </SketchButton>
+              </div>
+            )}
+
+            {/* STEP 2: SELECTION */}
+            {mode === "selection" && (
+              <div className="space-y-4">
+                <div className="text-center mb-4">
+                  <p className="font-display text-xl">Hello, <span className="text-primary font-bold">{username}</span>!</p>
+                  <p className="text-muted-foreground text-sm">What would you like to do?</p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 pt-2">
                   <SketchButton
                     variant="accent"
                     size="lg"
@@ -116,31 +142,57 @@ const Index = () => {
                     className="w-full"
                   >
                     <Users className="w-5 h-5" />
-                    Join
+                    Join Existing Room
+                  </SketchButton>
+                  <SketchButton
+                    variant="secondary"
+                    size="lg"
+                    onClick={() => setMode("create")}
+                    className="w-full"
+                  >
+                    <Pencil className="w-5 h-5" />
+                    Create New Room
                   </SketchButton>
                 </div>
+                <SketchButton
+                  variant="ghost"
+                  onClick={() => setMode("name")}
+                  className="w-full"
+                  size="sm"
+                >
+                  Back
+                </SketchButton>
               </div>
             )}
 
+            {/* STEP 3A: CREATE ROOM (PROTECTED) */}
             {mode === "create" && (
               <div className="space-y-4">
-                <h2 className="text-2xl font-handwritten text-center">Create a Room</h2>
-                <p className="text-center text-muted-foreground">
-                  {username ? `Ready, ${username}?` : "Enter your name first!"}
-                </p>
+                <h2 className="text-2xl font-handwritten text-center">Host Only</h2>
+                <div>
+                  <label className="block text-sm font-display mb-2">Secret Key</label>
+                  <Input
+                    type="password"
+                    placeholder="Enter admin password..."
+                    value={secretKey}
+                    onChange={(e) => setSecretKey(e.target.value)}
+                    className="h-12 text-lg border-2 border-foreground rounded-xl"
+                    onKeyDown={(e) => e.key === "Enter" && handleCreate()}
+                  />
+                </div>
                 <SketchButton
                   variant="success"
                   size="xl"
                   onClick={handleCreate}
-                  disabled={loading || !username.trim()}
+                  disabled={loading || !secretKey.trim()}
                   className="w-full"
                 >
                   <Sparkles className="w-6 h-6" />
-                  {loading ? "Creating..." : "Start New Game"}
+                  {loading ? "Creating..." : "Verify & Create"}
                 </SketchButton>
                 <SketchButton
                   variant="ghost"
-                  onClick={() => setMode("home")}
+                  onClick={() => setMode("selection")}
                   className="w-full"
                 >
                   Back
@@ -148,6 +200,7 @@ const Index = () => {
               </div>
             )}
 
+            {/* STEP 3B: JOIN ROOM */}
             {mode === "join" && (
               <div className="space-y-4">
                 <h2 className="text-2xl font-handwritten text-center">Join a Room</h2>
@@ -159,20 +212,21 @@ const Index = () => {
                     onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
                     className="h-12 text-2xl text-center tracking-widest font-mono border-2 border-foreground rounded-xl uppercase"
                     maxLength={5}
+                    onKeyDown={(e) => e.key === "Enter" && handleJoin()}
                   />
                 </div>
                 <SketchButton
                   variant="success"
                   size="xl"
                   onClick={handleJoin}
-                  disabled={loading || !username.trim() || !roomCode.trim()}
+                  disabled={loading || !roomCode.trim()}
                   className="w-full"
                 >
                   {loading ? "Joining..." : "Join Game"}
                 </SketchButton>
                 <SketchButton
                   variant="ghost"
-                  onClick={() => setMode("home")}
+                  onClick={() => setMode("selection")}
                   className="w-full"
                 >
                   Back

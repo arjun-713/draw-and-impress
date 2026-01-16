@@ -6,6 +6,16 @@ import { useAuth } from '@/hooks/useAuth';
 
 type RoomLoadingState = 'idle' | 'loading' | 'joined' | 'error';
 
+export interface Vote {
+  id: string;
+  room_id: string;
+  voter_id: string;
+  drawing_id: string;
+  round: number;
+  rating: number;
+  created_at?: string;
+}
+
 const ROOM_LOAD_TIMEOUT = 8000; // 8 seconds
 
 export const useRoom = () => {
@@ -19,7 +29,7 @@ export const useRoom = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [roomLoadingState, setRoomLoadingState] = useState<RoomLoadingState>('idle');
-  const [votes, setVotes] = useState<any[]>([]);
+  const [votes, setVotes] = useState<Vote[]>([]);
 
   // Track if we've initialized to avoid duplicate fetches
   const initRef = useRef(false);
@@ -70,7 +80,7 @@ export const useRoom = () => {
       .eq('round', round);
 
     if (error) throw error;
-    return data;
+    return data as Vote[];
   }, []);
 
   // Check if user is already in room
@@ -135,13 +145,14 @@ export const useRoom = () => {
       setRoomLoadingState('joined');
 
       return code;
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(errorMessage);
       setRoomLoadingState('error');
       toast({
         variant: 'destructive',
         title: 'Error creating room',
-        description: err.message,
+        description: errorMessage,
       });
       throw err;
     } finally {
@@ -207,13 +218,14 @@ export const useRoom = () => {
       setRoomState(roomData);
       setRoomLoadingState('joined');
 
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
+      setError(errorMessage);
       setRoomLoadingState('error');
       toast({
         variant: 'destructive',
         title: 'Error joining room',
-        description: err.message,
+        description: errorMessage,
       });
       throw err;
     } finally {
@@ -278,10 +290,10 @@ export const useRoom = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       return true;
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error rejoining room:', err);
       setRoomLoadingState('error');
-      setError(err.message);
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
       return false;
     }
   }, [userId, authLoading, fetchRoom, fetchPlayers, fetchDrawings, checkUserInRoom, setPlayer, setRoom, roomLoadingState]);
@@ -300,7 +312,7 @@ export const useRoom = () => {
       setRoomState(null);
       setPlayers([]);
       setRoomLoadingState('idle');
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error leaving room:', err);
     }
   }, [playerId, clearGame]);
@@ -380,12 +392,12 @@ export const useRoom = () => {
       }
 
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error submitting drawing:', err);
       toast({
         variant: 'destructive',
         title: 'Submission failed',
-        description: err.message,
+        description: err instanceof Error ? err.message : 'An unknown error occurred',
       });
       return false;
     }
@@ -421,12 +433,12 @@ export const useRoom = () => {
       }
 
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error casting vote:', err);
       toast({
         variant: 'destructive',
         title: 'Vote failed',
-        description: err.message,
+        description: err instanceof Error ? err.message : 'An unknown error occurred',
       });
       return false;
     }
@@ -484,10 +496,10 @@ export const useRoom = () => {
         }
 
         setRoomLoadingState('joined');
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error loading room data:', err);
         setRoomLoadingState('error');
-        setError(err.message);
+        setError(err instanceof Error ? err.message : 'An unknown error occurred');
       }
     };
 
@@ -546,32 +558,35 @@ export const useRoom = () => {
       .subscribe();
 
     // Subscribe to votes (for live rating updates)
-    const votesChannel = supabase
-      .channel(`votes-${roomCode}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'votes', filter: `room_id=eq.${room.id}` },
-        async (payload) => {
-          // We could append payload.new, but for simplicity let's just refetch or rely on a separate state
-          // Since we need to calculate averages, fetching all votes for round is safer
-          if (room?.id && room.current_round > 0) {
-            try {
-              const votesData = await fetchVotes(room.id, room.current_round);
-              setVotes(votesData);
-            } catch (err) {
-              console.error('Error refetching votes:', err);
+    // Subscribe to votes (for live rating updates)
+    let votesChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    if (room?.id) {
+      votesChannel = supabase
+        .channel(`votes-${roomCode}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'votes', filter: `room_id=eq.${room.id}` },
+          async (payload) => {
+            if (room?.id && room.current_round > 0) {
+              try {
+                const votesData = await fetchVotes(room.id, room.current_round);
+                setVotes(votesData);
+              } catch (err) {
+                console.error('Error refetching votes:', err);
+              }
             }
           }
-        }
-      )
-      .subscribe();
+        )
+        .subscribe();
+    }
 
     return () => {
       initRef.current = false;
       supabase.removeChannel(roomChannel);
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(drawingsChannel);
-      supabase.removeChannel(votesChannel);
+      if (votesChannel) supabase.removeChannel(votesChannel);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
     };
   }, [roomCode, room?.id, room?.current_round, authLoading, userId, fetchRoom, fetchPlayers, fetchDrawings, fetchVotes]);

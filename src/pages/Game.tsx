@@ -8,7 +8,7 @@ import { SketchCard, SketchCardContent } from "@/components/game/SketchCard";
 import { PlayerAvatar } from "@/components/game/PlayerAvatar";
 import { Timer } from "@/components/game/Timer";
 import { Chat } from "@/components/game/Chat";
-import { useRoom } from "@/hooks/useRoom";
+import { useRoom, type Vote } from "@/hooks/useRoom";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -94,7 +94,7 @@ const Game = () => {
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [room?.status, hasSubmitted]);
+  }, [room?.status, hasSubmitted, activeColor]);
 
   // Update Brush
   useEffect(() => {
@@ -133,7 +133,7 @@ const Game = () => {
     if (!fabricCanvas || hasSubmitted) return;
     setIsSubmitting(true);
     try {
-      const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8 });
+      const dataUrl = fabricCanvas.toDataURL({ format: "png", quality: 0.8, multiplier: 1 });
       const success = await submitDrawing(dataUrl);
       if (success) {
         setHasSubmitted(true);
@@ -156,9 +156,9 @@ const Game = () => {
 
   const getAverageRating = (drawingId: string) => {
     if (!allVotes) return 0;
-    const drawingVotes = allVotes.filter((v: any) => v.drawing_id === drawingId);
+    const drawingVotes = (allVotes as Vote[]).filter((v) => v.drawing_id === drawingId);
     if (drawingVotes.length === 0) return 0;
-    const sum = drawingVotes.reduce((acc: number, v: any) => acc + (v.rating || 0), 0);
+    const sum = drawingVotes.reduce((acc, v) => acc + (v.rating || 0), 0);
     return sum / drawingVotes.length;
   };
 
@@ -182,7 +182,7 @@ const Game = () => {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [room?.id, room?.phase_end_at, checkPhaseTransition]);
+  }, [room?.id, room?.phase_end_at, checkPhaseTransition, room?.status]);
 
   // Phase Auto-actions
   const handleTimeComplete = async () => {
