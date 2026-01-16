@@ -17,6 +17,7 @@ interface Room {
   vote_time: number;
   phase_end_at: string | null;
   current_prompt: string | null;
+  used_prompts?: string[];
 }
 
 interface Drawing {
@@ -139,14 +140,38 @@ async function transitionRoom(
         newRound = current_round + 1;
         newPhaseEndAt = new Date(Date.now() + draw_time * 1000).toISOString();
 
-        // Get a new random prompt
+        // Get all prompts
         const { data: prompts } = await supabase
           .from('prompts')
-          .select('text')
-          .limit(100);
+          .select('text');
 
         if (prompts && prompts.length > 0) {
-          newPrompt = prompts[Math.floor(Math.random() * prompts.length)].text;
+          // Get current used prompts for this room
+          const { data: roomData } = await supabase
+            .from('rooms')
+            .select('used_prompts')
+            .eq('id', id)
+            .single();
+
+          const usedPrompts = roomData?.used_prompts || [];
+
+          // Filter available
+          const availablePrompts = prompts.filter((p: any) => !usedPrompts.includes(p.text));
+
+          if (availablePrompts.length > 0) {
+            newPrompt = availablePrompts[Math.floor(Math.random() * availablePrompts.length)].text;
+          } else {
+            // If all used, reset or pick random from all
+            newPrompt = prompts[Math.floor(Math.random() * prompts.length)].text;
+          }
+
+          // Update used prompts
+          if (newPrompt) {
+            await supabase
+              .from('rooms')
+              .update({ used_prompts: [...usedPrompts, newPrompt] })
+              .eq('id', id);
+          }
         }
       }
       break;

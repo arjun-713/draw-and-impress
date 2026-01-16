@@ -190,6 +190,8 @@ const Game = () => {
       if (fabricCanvas) await handleSubmit();
     }
     await checkPhaseTransition();
+    // Force a re-check after a brief delay to ensure server processes it
+    setTimeout(() => checkPhaseTransition(), 2000);
   };
 
   // Results Navigation
@@ -230,18 +232,26 @@ const Game = () => {
             <SketchCard className="w-full">
               <SketchCardContent>
                 <div className="flex flex-wrap items-center gap-2 mb-4 justify-between">
-                  <div className="flex gap-1">
-                    {COLORS.map(c => (
+                  {/* Expanded Color Palette */}
+                  <div className="flex gap-1 flex-wrap max-w-[50%]">
+                    {["#000000", "#ffffff", "#1a1a2e", "#FF6B6B", "#4ECDC4", "#FFE66D", "#95E1D3", "#F38181", "#AA96DA", "#FF9F43", "#6C5CE7", "#A8DADC", "#457B9D", "#1D3557", "#E63946"].map(c => (
                       <button key={c} onClick={() => { setActiveColor(c); setTool("pen"); }}
-                        className={cn("w-8 h-8 rounded-full border-2 border-foreground transition-transform", activeColor === c && tool === "pen" && "scale-110 ring-2 ring-primary")}
+                        className={cn("w-6 h-6 rounded-full border border-foreground/20 transition-transform hover:scale-110", activeColor === c && tool === "pen" && "scale-125 ring-2 ring-primary")}
                         style={{ backgroundColor: c }} disabled={hasSubmitted} />
                     ))}
                   </div>
+                  {/* Tools */}
                   <div className="flex gap-2">
-                    <SketchButton size="icon" variant={tool === "pen" ? "default" : "outline"} onClick={() => setTool("pen")} disabled={hasSubmitted}><Pencil /></SketchButton>
-                    <SketchButton size="icon" variant={tool === "eraser" ? "default" : "outline"} onClick={() => setTool("eraser")} disabled={hasSubmitted}><Eraser /></SketchButton>
-                    <SketchButton size="icon" variant="outline" onClick={handleUndo} disabled={hasSubmitted}><Undo /></SketchButton>
-                    <SketchButton size="icon" variant="destructive" onClick={handleClear} disabled={hasSubmitted}><Trash2 /></SketchButton>
+                    <SketchButton size="icon" variant={tool === "pen" ? "default" : "outline"} onClick={() => setTool("pen")} disabled={hasSubmitted} title="Pencil"><Pencil className="w-4 h-4" /></SketchButton>
+                    <SketchButton size="icon" variant={tool === "eraser" ? "default" : "outline"} onClick={() => setTool("eraser")} disabled={hasSubmitted} title="Eraser"><Eraser className="w-4 h-4" /></SketchButton>
+                    <SketchButton size="icon" variant="outline" onClick={() => {
+                      if (fabricCanvas) {
+                        fabricCanvas.backgroundColor = activeColor;
+                        fabricCanvas.renderAll();
+                      }
+                    }} disabled={hasSubmitted} title="Fill Background"><div className="w-4 h-4 bg-current rounded-sm" /></SketchButton>
+                    <SketchButton size="icon" variant="outline" onClick={handleUndo} disabled={hasSubmitted} title="Undo"><Undo className="w-4 h-4" /></SketchButton>
+                    <SketchButton size="icon" variant="destructive" onClick={handleClear} disabled={hasSubmitted} title="Clear"><Trash2 className="w-4 h-4" /></SketchButton>
                   </div>
                 </div>
 
